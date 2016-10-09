@@ -1,1 +1,802 @@
-# install and load relevant packagesinstall.packages('arules')install.packages('arulesViz')install.packages('vegan')install.packages('dbscan')library(arules)library(arulesViz)library(plyr)library(reshape2)library(graphics)library(vegan)library(dbscan)# 1. Load and set-up data# import the raw transaction data to Rtransaction_data <- read.table("Shopping Transaction Data.txt", sep = "|", header = TRUE)str(transaction_data)head(transaction_data)sapply(transaction_data, class)# apply filtering to remove non-product level data and void transactionsnrow(transaction_data)transaction_clean <- transaction_data[transaction_data$Type == "Product" &                      transaction_data$Exclusion == "Product level" &                       transaction_data$ItemCode != " "  &                        transaction_data$Quantity > 0,]nrow(transaction_clean)# remove N/A records in datatransaction_clean <-  transaction_clean[-c(1:6),]nrow(transaction_clean)# select only relevant columnstransaction_clean2 <- subset(transaction_clean, select = c(Key, ItemCode, Dept, Date, Hour))transaction_clean2$ItemCode <- as.character(transaction_clean2$ItemCode)head(transaction_clean2)# read-in the product categories tableproduct_categories <- read.csv("Department_List.csv", header = TRUE)product_categories$ItemCode <- as.character(product_categories$ItemCode)head(product_categories)# join the category datatransaction_final <- join(transaction_clean2, product_categories, by = 'ItemCode',                           type = 'left', match = 'first')transaction_final <- subset(transaction_final, select = c(Key, ItemCode, Dept,Category_FINAL, Date, Hour))nrow(transaction_final)head(transaction_final)# export to csv to allow reading-in cleansed transaction formatwrite.csv(transaction_final, "Transactions_Clean.csv")# 2. Put data into transaction format# get transaction data by specific producttransaction_product <- read.transactions(file = "Transactions_Clean.csv",                                         format = "single", sep =",",cols=c(2,4),                                          skip = 1, rm.duplicates = TRUE)# display some information relating to transaction level datahead(transaction_product@itemInfo)head(transaction_product@itemsetInfo)inspect(transaction_product[c(1:100)])# get transaction data by specific categorytransaction_category <- read.transactions(file = "Transactions_Clean.csv",                                          format = "single", sep =",",cols=c(2,5),                                         skip = 1, rm.duplicates = TRUE)head(transaction_category@itemInfo)head(transaction_category@itemsetInfo)inspect(transaction_category[c(1:100)])# 3a. Association Rules (Product Level)# set-up assocation rules for individual productsproduct_rules <- apriori(transaction_product,                        parameter = list(support=0.01, confidence =0.1, minlen=2))product_rules <- apriori(transaction_product,                          parameter = list(support=0.005, confidence =0.1, minlen=3))product_rules <- apriori(transaction_product,                          parameter = list(support=0.001, confidence =0.1, minlen=4))product_rules <- apriori(transaction_product,                          parameter = list(support=0.0005, confidence =0.1, minlen=5))# inspect and plot outputinspect(sort(product_rules, by = "confidence"))plot(product_rules, method = "matrix", control = list(k=20))# 3b. Association Rules (Category Level)# set-up assocation rules for categoriescategory_rules <- apriori(transaction_category,                          parameter = list(support=0, confidence =0, minlen=2, maxlen=2))category_rules <- as(category_rules,"data.frame")# output to csvwrite.csv(category_rules, 'category_rules_2prod.csv')# try adjust some parameterscategory_rules <- apriori(transaction_category,                          parameter = list(support=0.01, confidence =0.01, minlen=3, maxlen=3))category_rules <- as(category_rules,"data.frame")write.csv(category_rules, 'category_rules_3prod.csv')category_rules <- apriori(transaction_category,                          parameter = list(support=0.008, confidence =0.01, minlen=4, maxlen=4))category_rules <- as(category_rules,"data.frame")write.csv(category_rules, 'category_rules_4prod.csv')category_rules <- apriori(transaction_category,                          parameter = list(support=0.005, confidence =0.01, minlen=5, maxlen=5))category_rules <- as(category_rules,"data.frame")write.csv(category_rules, 'category_rules_5prod.csv')category_rules <- apriori(transaction_category,                           parameter = list(support=0.003, confidence =0.01, minlen=6, maxlen=6))category_rules <- as(category_rules,"data.frame")write.csv(category_rules, 'category_rules_6prod.csv')# get full listing for rules with specified support and confidencecategory_rules <- apriori(transaction_category,                           parameter = list(support=0.01, confidence = 0.3))category_rules <- as(category_rules,"data.frame")write.csv(category_rules, 'category_rules_full.csv')# reapply rules for plottingcategory_rules <- apriori(transaction_category,                           parameter = list(support=0.01, confidence =0.1, minlen=2, maxlen=2))category_rules <- as(category_rules,"data.frame")write.csv(category_rules , 'category_rules_2prod_upd.csv')# sample plots for assocation rule outputinspect(sort(category_rules, by = "lift"))plot(category_rules, method = "matrix")plot(category_rules, method = "grouped")plot(category_rules, method = "scatterplot")# 4. Clustering# distance matrix setup based on assocation rule outputcategory_dist <- read.csv("dist_matrix-v2.csv", header = TRUE)category_dist <- as.data.frame(category_dist)# need to replace 0 with small value as we will be dividing by 1 latercategory_dist$lift[category_dist$lift==0] <- 0.01# convert into distance matrix formatdist_matrix <- acast(category_dist, LHS~RHS, value.var = "lift")dist_matrix <- 1/dist_matrixdist_matrix[is.na(dist_matrix)] <- 0head(dist_matrix)dist_converted <- as.dist(dist_matrix)# ALTERNATIVELY - COULD USE STANDARD CLUSTERING DISTANCE APPROACHtrans_bycat <- transaction_final[,c(1,4)]trans_table <- table(unique(trans_bycat))# filter to only include 25 most popular products for cluster analysistrans_table <- (trans_table[,c(1,2,4,7,8,9,15,18,22,23,27,32,37,38,42,43,47,49,57,60,68,74,76,78,79,80)])head(trans_table)trans_matrix <- matrix(trans_table, ncol = length(trans_table[1,]))trans_matrix <- trans_matrix[,-1]dimnames(trans_matrix) <- list(rownames(trans_table), colnames(trans_table)[-1])head(trans_matrix)dist_converted <- dist(t(trans_matrix), method = "euclidean")# 4a. hierarchical clusteringhclust_prod <- hclust(dist_converted)# plot dendrogram for each methodplot(hclust_prod, main = "Dendrogram Based on ARule Lift")abline(h=0.75, col = "red")plot(hclust_prod, main = "Dendrogram Based on Euclidean Distance")abline(h=0.75, col = "red")# 4b. k-means clustering# determine the optimal number of clusters by looking at within sum squared errorwss <- vector()wss <- c(wss, rep(0,10))for (i in 2:11) wss[i-1] <- sum(kmeans(dist_converted,                                      centers=i, iter.max = 1000)$withinss)plot(2:11, wss, type="b", main = "Number of Clusters - Using ARules",    xlab="Number of Clusters",   ylab="Within groups sum of squares")plot(2:11, wss, type="b", main = "Number of Clusters - Using Euclidean Distance",     xlab="Number of Clusters",     ylab="Within groups sum of squares")# apply k-means, where k = 5kclust_prod <- kmeans(dist_converted, centers =5, iter.max = 1000)# set-up MDS scalingcmd <- cmdscale(dist_converted)groups <- levels(factor(kclust_prod$cluster))kplot <- ordiplot(cmd, type = 'points')# plot each set of pointsfor (i in seq_along(groups)){  points(cmd[factor(kclust_prod$cluster) == groups[i],], col = i, pch =16)}# format outputordihull(cmd, factor(kclust_prod$cluster), lty = "dotted", label = TRUE)kclust_prod$cluster# 4c. DBScan clustering# difficult to get any distinct clusters using euclidean distance method# either creates a clsuter for each category or else a single cluster for everythingdbs_prod <- dbscan(dist_converted, eps=0.001, minPts = 1)dbs_prodpredict(dbs_prod, dist_converted)# apply MDS methodcmd <- cmdscale(dist_converted)groups <- levels(factor(dbs_prod$cluster))ordiplot(cmd, type = 'points', xlim = c(-100,80))# plot each set of pointsfor (i in seq_along(groups)){  points(cmd[factor(dbs_prod$cluster) == groups[i],], col = i, pch =16)}ordihull(cmd, factor(dbs_prod$cluster), lty = "dotted", label = TRUE)
+
+
+ 
+ 
+  # install and load
+  relevant packages
+ 
+ 
+  install.packages('arules')
+ 
+ 
+  install.packages('arulesViz')
+ 
+ 
+  install.packages('vegan')
+ 
+ 
+  install.packages('dbscan')
+ 
+ 
+  library(arules)
+ 
+ 
+  library(arulesViz)
+ 
+ 
+  library(plyr)
+ 
+ 
+  library(reshape2)
+ 
+ 
+  library(graphics)
+ 
+ 
+  library(vegan)
+ 
+ 
+  library(dbscan)
+ 
+ 
+  
+ 
+ 
+  # 1. Load and set-up data
+ 
+ 
+  # import the raw transaction data to R
+ 
+ 
+  transaction_data <-
+  read.table("Shopping Transaction Data.txt", sep = "|",
+  header = TRUE)
+ 
+ 
+  str(transaction_data)
+ 
+ 
+  head(transaction_data)
+ 
+ 
+  sapply(transaction_data, class)
+ 
+ 
+  
+ 
+ 
+  # apply filtering to remove non-product
+  level data and void transactions
+ 
+ 
+  nrow(transaction_data)
+ 
+ 
+  transaction_clean <-
+  transaction_data[transaction_data$Type == "Product" &
+ 
+ 
+                       
+  transaction_data$Exclusion == "Product level" &
+ 
+ 
+                        
+  transaction_data$ItemCode != " "  &
+ 
+ 
+                         
+  transaction_data$Quantity > 0,]
+ 
+ 
+  nrow(transaction_clean)
+ 
+ 
+  
+ 
+ 
+  # remove N/A records in data
+ 
+ 
+  transaction_clean <-  transaction_clean[-c(1:6),]
+ 
+ 
+  nrow(transaction_clean)
+ 
+ 
+  
+ 
+ 
+  # select only relevant columns
+ 
+ 
+  transaction_clean2 <-
+  subset(transaction_clean, select = c(Key, ItemCode, Dept, Date, Hour))
+ 
+ 
+  transaction_clean2$ItemCode <-
+  as.character(transaction_clean2$ItemCode)
+ 
+ 
+  head(transaction_clean2)
+ 
+ 
+  
+ 
+ 
+  # read-in the product categories table
+ 
+ 
+  product_categories <-
+  read.csv("Department_List.csv", header = TRUE)
+ 
+ 
+  product_categories$ItemCode <-
+  as.character(product_categories$ItemCode)
+ 
+ 
+  head(product_categories)
+ 
+ 
+  
+ 
+ 
+  # join the category data
+ 
+ 
+  transaction_final <-
+  join(transaction_clean2, product_categories, by = 'ItemCode', 
+ 
+ 
+                            type = 'left',
+  match = 'first')
+ 
+ 
+  transaction_final <-
+  subset(transaction_final, select = c(Key, ItemCode, Dept,Category_FINAL,
+  Date, Hour))
+ 
+ 
+  nrow(transaction_final)
+ 
+ 
+  head(transaction_final)
+ 
+ 
+  
+ 
+ 
+  # export to csv to allow reading-in
+  cleansed transaction format
+ 
+ 
+  write.csv(transaction_final,
+  "Transactions_Clean.csv")
+ 
+ 
+  
+ 
+ 
+  # 2. Put data into transaction format
+ 
+ 
+  # get transaction data by specific
+  product
+ 
+ 
+  transaction_product <-
+  read.transactions(file = "Transactions_Clean.csv", 
+ 
+ 
+                                         
+  format = "single", sep =",",cols=c(2,4),
+ 
+ 
+                                           
+  skip = 1, rm.duplicates = TRUE)
+ 
+ 
+  
+ 
+ 
+  # display some information relating to
+  transaction level data
+ 
+ 
+  head(transaction_product@itemInfo)
+ 
+ 
+  head(transaction_product@itemsetInfo)
+ 
+ 
+  inspect(transaction_product[c(1:100)])
+ 
+ 
+  
+ 
+ 
+  # get transaction data by specific
+  category
+ 
+ 
+  transaction_category <-
+  read.transactions(file = "Transactions_Clean.csv", 
+ 
+ 
+                                          
+  format = "single", sep =",",cols=c(2,5),
+ 
+ 
+                                           skip
+  = 1, rm.duplicates = TRUE)
+ 
+ 
+  
+ 
+ 
+  head(transaction_category@itemInfo)
+ 
+ 
+  head(transaction_category@itemsetInfo)
+ 
+ 
+  inspect(transaction_category[c(1:100)])
+ 
+ 
+  
+ 
+ 
+  # 3a. Association Rules (Product Level)
+ 
+ 
+  # set-up assocation rules for individual
+  products
+ 
+ 
+  product_rules <-
+  apriori(transaction_product, 
+ 
+ 
+                         parameter =
+  list(support=0.01, confidence =0.1, minlen=2))
+ 
+ 
+  product_rules <-
+  apriori(transaction_product, 
+ 
+ 
+                           parameter =
+  list(support=0.005, confidence =0.1, minlen=3))
+ 
+ 
+  product_rules <-
+  apriori(transaction_product, 
+ 
+ 
+                           parameter =
+  list(support=0.001, confidence =0.1, minlen=4))
+ 
+ 
+  product_rules <-
+  apriori(transaction_product, 
+ 
+ 
+                           parameter =
+  list(support=0.0005, confidence =0.1, minlen=5))
+ 
+ 
+  
+ 
+ 
+  # inspect and plot output
+ 
+ 
+  inspect(sort(product_rules, by =
+  "confidence"))
+ 
+ 
+  plot(product_rules, method =
+  "matrix", control = list(k=20))
+ 
+ 
+  
+ 
+ 
+  
+ 
+ 
+  # 3b. Association Rules (Category Level)
+ 
+ 
+  # set-up assocation rules for categories
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                           parameter =
+  list(support=0, confidence =0, minlen=2, maxlen=2))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  
+ 
+ 
+  # output to csv
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_2prod.csv')
+ 
+ 
+  
+ 
+ 
+  # try adjust some parameters
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                           parameter =
+  list(support=0.01, confidence =0.01, minlen=3, maxlen=3))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_3prod.csv')
+ 
+ 
+  
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                           parameter =
+  list(support=0.008, confidence =0.01, minlen=4, maxlen=4))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_4prod.csv')
+ 
+ 
+  
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                           parameter =
+  list(support=0.005, confidence =0.01, minlen=5, maxlen=5))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_5prod.csv')
+ 
+ 
+  
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                            parameter =
+  list(support=0.003, confidence =0.01, minlen=6, maxlen=6))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_6prod.csv')
+ 
+ 
+  
+ 
+ 
+  # get full listing for rules with
+  specified support and confidence
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                            parameter =
+  list(support=0.01, confidence = 0.3))
+ 
+ 
+  
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules,
+  'category_rules_full.csv')
+ 
+ 
+  
+ 
+ 
+  # reapply rules for plotting
+ 
+ 
+  category_rules <-
+  apriori(transaction_category, 
+ 
+ 
+                            parameter =
+  list(support=0.01, confidence =0.1, minlen=2, maxlen=2))
+ 
+ 
+  category_rules <-
+  as(category_rules,"data.frame")
+ 
+ 
+  write.csv(category_rules ,
+  'category_rules_2prod_upd.csv')
+ 
+ 
+  
+ 
+ 
+  # sample plots for assocation rule
+  output
+ 
+ 
+  inspect(sort(category_rules, by =
+  "lift"))
+ 
+ 
+  plot(category_rules, method =
+  "matrix")
+ 
+ 
+  plot(category_rules, method =
+  "grouped")
+ 
+ 
+  plot(category_rules, method =
+  "scatterplot")
+ 
+ 
+  
+ 
+ 
+  # 4. Clustering
+ 
+ 
+  # distance matrix setup based on
+  assocation rule output
+ 
+ 
+  category_dist <-
+  read.csv("dist_matrix-v2.csv", header = TRUE)
+ 
+ 
+  category_dist <-
+  as.data.frame(category_dist)
+ 
+ 
+  
+ 
+ 
+  # need to replace 0 with small value as
+  we will be dividing by 1 later
+ 
+ 
+  category_dist$lift[category_dist$lift==0]
+  <- 0.01
+ 
+ 
+  
+ 
+ 
+  # convert into distance matrix format
+ 
+ 
+  dist_matrix <- acast(category_dist,
+  LHS~RHS, value.var = "lift")
+ 
+ 
+  dist_matrix <- 1/dist_matrix
+ 
+ 
+  dist_matrix[is.na(dist_matrix)] <- 0
+ 
+ 
+  head(dist_matrix)
+ 
+ 
+  dist_converted <-
+  as.dist(dist_matrix)
+ 
+ 
+  
+ 
+ 
+  # ALTERNATIVELY - COULD USE STANDARD
+  CLUSTERING DISTANCE APPROACH
+ 
+ 
+  trans_bycat <-
+  transaction_final[,c(1,4)]
+ 
+ 
+  trans_table <-
+  table(unique(trans_bycat))
+ 
+ 
+  
+ 
+ 
+  # filter to only include 25 most popular
+  products for cluster analysis
+ 
+ 
+  trans_table <-
+  (trans_table[,c(1,2,4,7,8,9,15,18,22,23,27,32,37,38,42,43,47,49,57,60,68,74,76,78,79,80)])
+ 
+ 
+  head(trans_table)
+ 
+ 
+  trans_matrix <- matrix(trans_table,
+  ncol = length(trans_table[1,]))
+ 
+ 
+  trans_matrix <- trans_matrix[,-1]
+ 
+ 
+  dimnames(trans_matrix) <-
+  list(rownames(trans_table), colnames(trans_table)[-1])
+ 
+ 
+  head(trans_matrix)
+ 
+ 
+  dist_converted <-
+  dist(t(trans_matrix), method = "euclidean")
+ 
+ 
+  
+ 
+ 
+  # 4a. hierarchical clustering
+ 
+ 
+  hclust_prod <- hclust(dist_converted)
+ 
+ 
+  
+ 
+ 
+  # plot dendrogram for each method
+ 
+ 
+  plot(hclust_prod, main =
+  "Dendrogram Based on ARule Lift")
+ 
+ 
+  abline(h=0.75, col = "red")
+ 
+ 
+  
+ 
+ 
+  plot(hclust_prod, main =
+  "Dendrogram Based on Euclidean Distance")
+ 
+ 
+  abline(h=0.75, col = "red")
+ 
+ 
+  
+ 
+ 
+  # 4b. k-means clustering
+ 
+ 
+  
+ 
+ 
+  # determine the optimal number of
+  clusters by looking at within sum squared error
+ 
+ 
+  wss <- vector()
+ 
+ 
+  wss <- c(wss, rep(0,10))
+ 
+ 
+  
+ 
+ 
+  for (i in 2:11) wss[i-1] <-
+  sum(kmeans(dist_converted, 
+ 
+ 
+                                      
+  centers=i, iter.max = 1000)$withinss)
+ 
+ 
+  
+ 
+ 
+  plot(2:11, wss, type="b", main
+  = "Number of Clusters - Using ARules",
+ 
+ 
+     
+  xlab="Number of Clusters",
+ 
+ 
+    
+  ylab="Within groups sum of squares")
+ 
+ 
+  
+ 
+ 
+  plot(2:11, wss, type="b", main
+  = "Number of Clusters - Using Euclidean Distance",
+ 
+ 
+      
+  xlab="Number of Clusters",
+ 
+ 
+      
+  ylab="Within groups sum of squares")
+ 
+ 
+  
+ 
+ 
+  
+ 
+ 
+  # apply k-means, where k = 5
+ 
+ 
+  kclust_prod <- kmeans(dist_converted,
+  centers =5, iter.max = 1000)
+ 
+ 
+  
+ 
+ 
+  # set-up MDS scaling
+ 
+ 
+  cmd <- cmdscale(dist_converted)
+ 
+ 
+  groups <-
+  levels(factor(kclust_prod$cluster))
+ 
+ 
+  kplot <- ordiplot(cmd, type =
+  'points')
+ 
+ 
+  
+ 
+ 
+  # plot each set of points
+ 
+ 
+  for (i in seq_along(groups)){
+ 
+ 
+   
+  points(cmd[factor(kclust_prod$cluster) == groups[i],], col = i, pch
+  =16)
+ 
+ 
+  }
+ 
+ 
+  
+ 
+ 
+  # format output
+ 
+ 
+  ordihull(cmd,
+  factor(kclust_prod$cluster), lty = "dotted", label = TRUE)
+ 
+ 
+  kclust_prod$cluster
+ 
+ 
+  
+ 
+ 
+  # 4c. DBScan clustering
+ 
+ 
+  
+ 
+ 
+  # difficult to get any distinct clusters
+  using euclidean distance method
+ 
+ 
+  # either creates a clsuter for each
+  category or else a single cluster for everything
+ 
+ 
+  dbs_prod <- dbscan(dist_converted,
+  eps=0.001, minPts = 1)
+ 
+ 
+  dbs_prod
+ 
+ 
+  predict(dbs_prod, dist_converted)
+ 
+ 
+  
+ 
+ 
+  # apply MDS method
+ 
+ 
+  cmd <- cmdscale(dist_converted)
+ 
+ 
+  groups <-
+  levels(factor(dbs_prod$cluster))
+ 
+ 
+  ordiplot(cmd, type = 'points', xlim =
+  c(-100,80))
+ 
+ 
+  
+ 
+ 
+  # plot each set of points
+ 
+ 
+  for (i in seq_along(groups)){
+ 
+ 
+   
+  points(cmd[factor(dbs_prod$cluster) == groups[i],], col = i, pch =16)
+ 
+ 
+  }
+ 
+ 
+  
+ 
+ 
+  ordihull(cmd, factor(dbs_prod$cluster),
+  lty = "dotted", label = TRUE)
+ 
+
